@@ -188,8 +188,9 @@ class Affectdataset(Dataset):
         vision = torch.tensor(self.dataset['vision'][ind])
         audio = torch.tensor(self.dataset['audio'][ind])
         text = torch.tensor(self.dataset['text'][ind])
-        tmp_label = self.dataset['labels'][ind]
-        id = self.dataset['id'][ind] # sentence index
+
+        
+        
         
 
         if self.aligned:
@@ -213,7 +214,6 @@ class Affectdataset(Dataset):
             audio = torch.nan_to_num((audio - audio.mean(0, keepdims=True)) / (torch.std(audio, axis=0, keepdims=True)))
             text = torch.nan_to_num((text - text.mean(0, keepdims=True)) / (torch.std(text, axis=0, keepdims=True)))
 
-        # To process labels based a particular dataset
         def _get_class(flag, data_type=self.data_type):
             if data_type in ['mosi', 'mosei', 'sarcasm']:
                 if flag > 0:
@@ -223,6 +223,7 @@ class Affectdataset(Dataset):
             else:
                 return [flag]
         
+        tmp_label = self.dataset['labels'][ind]
         if self.data_type == 'humor' or self.data_type == 'sarcasm':
             if (self.task == None) or (self.task == 'regression'):
                 if self.dataset['labels'][ind] < 1:
@@ -235,20 +236,17 @@ class Affectdataset(Dataset):
         label = torch.tensor(_get_class(tmp_label)).long() if self.task == "classification" else torch.tensor(
             tmp_label).float()
 
-        # if flatten data
         if self.flatten:
             return [vision.flatten(), audio.flatten(), text.flatten(), ind, \
                     label]
         else:
             if self.max_pad:
-                tmp = [vision, audio, text, id, label]
-                for i in range(len(tmp) - 2):
+                tmp = [vision, audio, text, label]
+                for i in range(len(tmp) - 1):
                     tmp[i] = tmp[i][:self.max_pad_num]
                     tmp[i] = F.pad(tmp[i], (0, 0, 0, self.max_pad_num - tmp[i].shape[0]))
-         
             else:
-                # id refers to the sentence index (add by me), ind comes from "sampler"
-                tmp = [vision, audio, text, id, ind, label]
+                tmp = [vision, audio, text, ind, label]
             return tmp
 
     def __len__(self):
@@ -292,14 +290,15 @@ def get_dataloader(
     for dataset in alldata:
         processed_dataset[dataset] = alldata[dataset]
 
-    train = DataLoader(Affectdataset(processed_dataset['train'], flatten_time_series, task=task, max_pad=max_pad, max_pad_num=max_seq_len, data_type=data_type, z_norm=z_norm), \
+    train = DataLoader(Affectdataset(processed_dataset['train'], flatten_time_series, task=task, max_pad=max_pad,               max_pad_num=max_seq_len, data_type=data_type, z_norm=z_norm), \
                        shuffle=train_shuffle, num_workers=num_workers, batch_size=batch_size, \
                        collate_fn=process)
     valid = DataLoader(Affectdataset(processed_dataset['valid'], flatten_time_series, task=task, max_pad=max_pad, max_pad_num=max_seq_len, data_type=data_type, z_norm=z_norm), \
                        shuffle=False, num_workers=num_workers, batch_size=batch_size, \
                        collate_fn=process)
-
-    # modify test data
+    # test = DataLoader(Affectdataset(processed_dataset['test'], flatten_time_series, task=task), \
+    #                   shuffle=False, num_workers=num_workers, batch_size=batch_size, \
+    #                   collate_fn=process)
     if robust_test:
         vids = [id for id in alldata['test']['id']]
 
@@ -386,27 +385,19 @@ def get_dataloader(
         test_robust_data['robust_timeseries'] = robust_timeseries
         return train, valid, test_robust_data
     else:
+        # test = dict()
         test = DataLoader(Affectdataset(processed_dataset['test'], flatten_time_series, task=task, max_pad=max_pad, max_pad_num=max_seq_len, data_type=data_type, z_norm=z_norm), \
                       shuffle=False, num_workers=num_workers, batch_size=batch_size, \
                       collate_fn=process)
         return train, valid, test
-
-
-
-### if max_pad = False, nots that the input is a batch of samples chosen by the sampler (batch_size), 
-# while data for sampler comes from <tmp> provided by <Affectdataset>
-
-# tmp = [vision, audio, text, id, ind, label]
-
 
 def _process_1(inputs: List):
     processed_input = []
     processed_input_lengths = []
     inds = []
     labels = []
-    ids = []
 
-    for i in range(len(inputs[0]) - 3):
+    for i in range(len(inputs[0]) - 2):
         feature = []
         for sample in inputs:
             feature.append(sample[i])
@@ -417,7 +408,6 @@ def _process_1(inputs: List):
     for sample in inputs:
         
         inds.append(sample[-2])
-        ids.append(sample[-3])
         # if len(sample[-2].shape) > 2:
         #     labels.append(torch.where(sample[-2][:, 1] == 1)[0])
         # else:
@@ -425,19 +415,17 @@ def _process_1(inputs: List):
             labels.append(sample[-1].reshape(sample[-1].shape[1], sample[-1].shape[0])[0])
         else:
             labels.append(sample[-1])
-    
+
     return processed_input, processed_input_lengths, \
-           torch.tensor(inds).view(len(inputs), 1), torch.tensor(labels).view(len(inputs), 1), ids 
+           torch.tensor(inds).view(len(inputs), 1), torch.tensor(labels).view(len(inputs), 1)
 
 
-### if max_pad = True
 def _process_2(inputs: List):
     processed_input = []
     processed_input_lengths = []
     labels = []
-    ids = []
 
-    for i in range(len(inputs[0]) - 2):
+    for i in range(len(inputs[0]) - 1):
         feature = []
         for sample in inputs:
             feature.append(sample[i])
@@ -445,18 +433,18 @@ def _process_2(inputs: List):
         # pad_seq = pad_sequence(feature, batch_first=True)
         processed_input.append(torch.stack(feature))
 
-    
-    # label 
     for sample in inputs:
+        
+        # if len(sample[-2].shape) > 2:
+        #     labels.append(torch.where(sample[-2][:, 1] == 1)[0])
+        # else:
+        # print(sample[-1].shape)
         if sample[-1].shape[1] > 1:
             labels.append(sample[-1].reshape(sample[-1].shape[1], sample[-1].shape[0])[0])
         else:
             labels.append(sample[-1])
 
-        # append sentence index in a batch
-        ids.append(sample[-2])
-
-    return processed_input[0], processed_input[1], processed_input[2], torch.tensor(labels).view(len(inputs), 1), ids
+    return processed_input[0], processed_input[1], processed_input[2], torch.tensor(labels).view(len(inputs), 1)
 
 
 if __name__ == '__main__':
@@ -467,6 +455,9 @@ if __name__ == '__main__':
     
 
     # for batch in traindata:
+    
+    
+    
     
     
     
@@ -484,6 +475,9 @@ if __name__ == '__main__':
         print(batch[-1])
         break
         # for b in batch:
-
+            
+            
+        
+        
         
         # break
